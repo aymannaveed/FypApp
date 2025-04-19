@@ -6,11 +6,18 @@ import pandas as pd
 import gdown
 import os
 from utils import eeg_to_spectrogram
+from keras.utils import register_keras_serializable
 
-# Page setup
+# Register custom layer to handle the SlicingOpLambda error
+@register_keras_serializable()
+class SlicingOpLambda(tf.keras.layers.Layer):
+    def call(self, inputs):
+        return inputs  # Dummy passthrough — actual slicing not used in inference
+
+# Set the page config
 st.set_page_config(page_title="Brain EEG Classifier", layout="wide")
 
-# UI styles
+# Styling (medical blue aesthetic)
 st.markdown("""
     <style>
         .stApp { background-color: #e3f2fd; }
@@ -36,6 +43,10 @@ st.markdown("""
             background-color: #1e88e5;
             color: white;
         }
+        .stSpinner > div {
+            text-align: center;
+            margin: 1rem 0;
+        }
     </style>
 """, unsafe_allow_html=True)
 
@@ -44,19 +55,60 @@ st.markdown('<p class="big-font">🧠 Harmful Brain Activity Classifier</p>', un
 st.markdown('<p class="small-font">EEG Diagnosis for a Smarter Tomorrow!</p>', unsafe_allow_html=True)
 st.markdown("---")
 
-# Model URLs (Google Drive direct links via gdown)
-model_urls = [
-    'https://drive.google.com/uc?id=19oM31bN9Az-ZQg26RLKoMHreJUxBnE-0',
-    'https://drive.google.com/uc?id=15OKbJj7x6ffHQ7DrY7Yima3p0JpQEAug',
-    'https://drive.google.com/uc?id=1bsVQOnGax39tpVxl2N6bLWx1MfdnvanZ',
-    'https://drive.google.com/uc?id=1BMJlP_Q1kyqMyxm2iXU6xuD1nMirvzAS',
-    'https://drive.google.com/uc?id=1pgh3q1RStFeoegSZfL1HjB-GUUl7ehi6',
-]
+# Custom Layers Definition
+class FixedDropout(tf.keras.layers.Dropout):
+    def __init__(self, rate, **kwargs):
+        super().__init__(rate, **kwargs)
+        self.supports_masking = True
 
-# Labels
-labels = ['Seizure', 'LPD', 'GPD', 'LRDA', 'GRDA', 'Other']
+    def call(self, inputs, training=None):
+        if training is None:
+            training = tf.keras.backend.learning_phase()
+        return super().call(inputs, training=training)
 
-# Class descriptions
+# Register custom objects
+custom_objects = {
+    'FixedDropout': FixedDropout,
+    'SlicingOpLambda': SlicingOpLambda,
+    'tf.operators.getitem': SlicingOpLambda
+}
+
+# Model Loading Function
+@st.cache_resource
+def load_models():
+    model_files = {
+        'EffNetB0_Fold0.h5': 'https://drive.google.com/uc?id=19vagTsjJushCJ25YikZzkCTyaLFfmfO-',
+        'EffNetB0_Fold1.h5': 'https://drive.google.com/uc?id=1LhptLaTjdDQ7KAoKzYCgUqNrvDFdOyci',
+        'EffNetB0_Fold2.h5': 'https://drive.google.com/uc?id=1iYXG31bFpLT-eIIFCk7qLSKnd67kwUP8',
+        'EffNetB0_Fold3.h5': 'https://drive.google.com/uc?id=1e7AEIA2sdJid1T5_HVDfTZz2NzWGYVhZ',
+        'EffNetB0_Fold4.h5': 'https://drive.google.com/uc?id=13KoESOQzPG1GwaFD5BBRT-SudBhkMD-k'
+    }
+    
+    os.makedirs('models', exist_ok=True)
+    models = []
+    
+    for filename, url in model_files.items():
+        model_path = os.path.join('models', filename)
+        try:
+            if not os.path.exists(model_path):
+                with st.spinner(f'Downloading {filename}...'):
+                    gdown.download(url, model_path, quiet=True)
+            
+            with st.spinner(f'Loading {filename}...'):
+                model = tf.keras.models.load_model(
+                    model_path,
+                    custom_objects=custom_objects,
+                    compile=False
+                )
+                models.append(model)
+        except Exception as e:
+            st.error(f"Failed to load {filename}: {str(e)}")
+            st.error("Please check your internet connection and try again.")
+            raise
+    
+    return models
+
+# Activity Descriptions
 activity_descriptions = {
     'Seizure': "Seizure activity is characterized by sudden and uncontrolled electrical disturbances in the brain.",
     'LPD': "LPD (Localize Paroxysmal Discharge) refers to abnormal electrical activity in a specific brain region.",
@@ -66,63 +118,51 @@ activity_descriptions = {
     'Other': "Other includes activity that doesn't fit predefined categories."
 }
 
-# Load models with cache
-@st.cache_resource
-def load_models():
-    os.makedirs("models", exist_ok=True)
-    models = []
-    for i, url in enumerate(model_urls):
-        filename = f"EffNetB0_Fold{i}.h5"
-        filepath = os.path.join("models", filename)
-        if not os.path.exists(filepath):
-            gdown.download(url, filepath, quiet=False)
-        model = tf.keras.models.load_model(filepath, compile=False)
-        models.append(model)
-    return models
-
-# Main app logic
+# Main App
 def main():
     name = st.text_input("Please enter your name:")
-    uploaded_file = st.file_uploader("📁 Upload EEG CSV", type=["csv", "parquet"])
-
+    uploaded_file = st.file_uploader("📁 Upload EEG .parquet File", type=["parquet"])
+    
     if uploaded_file and name:
         try:
-            # Read file
+            # Load data
             with st.spinner('Reading EEG data...'):
-                if uploaded_file.name.endswith(".csv"):
-                    df = pd.read_csv(uploaded_file)
-                else:
-                    df = pd.read_parquet(uploaded_file)
+                df = pd.read_parquet(uploaded_file)
             
-            # Spectrogram
-            with st.spinner('Converting to spectrogram...'):
+            # Process data
+            with st.spinner('Processing spectrogram...'):
                 spec = eeg_to_spectrogram(df)
                 x = np.zeros((1, 128, 256, 8), dtype='float32')
                 for i in range(4):
-                    x[0, :, :, i] = spec[:, :, i]
-                    x[0, :, :, i+4] = spec[:, :, i]
-
+                    x[0,:,:,i] = spec[:,:,i]
+                    x[0,:,:,i+4] = spec[:,:,i]
+            
             # Load models and predict
-            with st.spinner("Loading models and predicting..."):
+            with st.spinner('Initializing models...'):
                 models = load_models()
+            
+            with st.spinner('Making predictions...'):
                 preds = [model.predict(x, verbose=0)[0] for model in models]
                 final_pred = np.mean(preds, axis=0)
-                max_idx = np.argmax(final_pred)
-                max_label = labels[max_idx]
-                max_prob = final_pred[max_idx]
-
-            # Results
+            
+            # Display results
+            labels = ['Seizure', 'LPD', 'GPD', 'LRDA', 'GRDA', 'Other']
+            max_idx = np.argmax(final_pred)
+            max_label = labels[max_idx]
+            max_prob = final_pred[max_idx]
+            
             st.markdown("### 📊 Prediction Results")
             cols = st.columns(2)
             for i, (label, prob) in enumerate(zip(labels, final_pred)):
                 with cols[i % 2]:
-                    st.metric(label, f"{prob:.2%}", delta="HIGHEST" if label == max_label else None)
-
+                    st.metric(label, f"{prob:.2%}", 
+                            delta="HIGHEST" if label == max_label else None)
+            
             st.markdown("### 📝 Diagnosis Summary")
             st.success(f"Most likely activity: **{max_label}** ({max_prob:.2%} confidence)")
             st.markdown(f"**Description:** {activity_descriptions[max_label]}")
-
-            # Downloadable report
+            
+            # Generate report
             report = f"""
             <h2>Brain EEG Diagnosis Report</h2>
             <p><strong>Patient:</strong> {name}</p>
@@ -131,10 +171,10 @@ def main():
             <p><strong>Details:</strong> {activity_descriptions[max_label]}</p>
             """
             st.download_button("📥 Download Report", report, "eeg_report.html", "text/html")
-
+            
         except Exception as e:
             st.error(f"Processing failed: {str(e)}")
-            st.info("Please ensure the EEG file format is correct and retry.")
+            st.error("Please check your input file and try again.")
 
 if __name__ == "__main__":
     main()
