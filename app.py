@@ -36,6 +36,10 @@ st.markdown("""
             background-color: #1e88e5;
             color: white;
         }
+        .stSpinner > div {
+            text-align: center;
+            margin: 1rem 0;
+        }
     </style>
 """, unsafe_allow_html=True)
 
@@ -44,150 +48,134 @@ st.markdown('<p class="big-font">🧠 Harmful Brain Activity Classifier</p>', un
 st.markdown('<p class="small-font">EEG Diagnosis for a Smarter Tomorrow!</p>', unsafe_allow_html=True)
 st.markdown("---")
 
-# Handle custom dropout layer
-from tensorflow.keras.layers import Dropout, Lambda
-from tensorflow.keras.utils import get_custom_objects
-import tensorflow.keras.backend as K
-
-class FixedDropout(Dropout):
-    def __init__(self, rate, noise_shape=None, seed=None, **kwargs):
-        super(FixedDropout, self).__init__(rate, noise_shape=noise_shape, seed=seed, **kwargs)
+# Custom Layers Definition
+class FixedDropout(tf.keras.layers.Dropout):
+    def __init__(self, rate, **kwargs):
+        super().__init__(rate, **kwargs)
         self.supports_masking = True
+
     def call(self, inputs, training=None):
         if training is None:
-            training = K.learning_phase()
-        return super(FixedDropout, self).call(inputs, training)
+            training = tf.keras.backend.learning_phase()
+        return super().call(inputs, training=training)
 
-# Custom layer to handle SlicingOpLambda error
 class SlicingOpLambda(tf.keras.layers.Layer):
     def __init__(self, **kwargs):
-        super(SlicingOpLambda, self).__init__(**kwargs)
-    
+        super().__init__(**kwargs)
+
     def call(self, inputs):
-        # Default implementation - modify if you know the exact slicing needed
-        return inputs[:, :, :, :]
+        # Default slice operation - modify if you know specific slicing needed
+        return inputs[..., :]  # Returns all elements (no actual slicing)
 
 # Register custom objects
-get_custom_objects().update({
+custom_objects = {
     'FixedDropout': FixedDropout,
     'SlicingOpLambda': SlicingOpLambda,
-    'tf.operators.getitem': SlicingOpLambda  # Handle the legacy name
-})
+    'tf.operators.getitem': SlicingOpLambda
+}
 
-# Load all 5 models from Google Drive
+# Model Loading Function
 @st.cache_resource
 def load_models():
+    model_files = {
+        'EffNetB0_Fold0.h5': 'https://drive.google.com/uc?id=19vagTsjJushCJ25YikZzkCTyaLFfmfO-',
+        'EffNetB0_Fold1.h5': 'https://drive.google.com/uc?id=1LhptLaTjdDQ7KAoKzYCgUqNrvDFdOyci',
+        'EffNetB0_Fold2.h5': 'https://drive.google.com/uc?id=1iYXG31bFpLT-eIIFCk7qLSKnd67kwUP8',
+        'EffNetB0_Fold3.h5': 'https://drive.google.com/uc?id=1e7AEIA2sdJid1T5_HVDfTZz2NzWGYVhZ',
+        'EffNetB0_Fold4.h5': 'https://drive.google.com/uc?id=13KoESOQzPG1GwaFD5BBRT-SudBhkMD-k'
+    }
+    
+    os.makedirs('models', exist_ok=True)
     models = []
-    model_urls = [
-        'https://drive.google.com/uc?id=19vagTsjJushCJ25YikZzkCTyaLFfmfO-',
-        'https://drive.google.com/uc?id=1LhptLaTjdDQ7KAoKzYCgUqNrvDFdOyci',
-        'https://drive.google.com/uc?id=1iYXG31bFpLT-eIIFCk7qLSKnd67kwUP8',
-        'https://drive.google.com/uc?id=1e7AEIA2sdJid1T5_HVDfTZz2NzWGYVhZ',
-        'https://drive.google.com/uc?id=13KoESOQzPG1GwaFD5BBRT-SudBhkMD-k'
-    ]
     
-    # Create a temporary directory for models
-    os.makedirs('temp_models', exist_ok=True)
-    
-    for i, url in enumerate(model_urls):
+    for filename, url in model_files.items():
+        model_path = os.path.join('models', filename)
         try:
-            output_path = f'temp_models/EffNetB0_Fold{i}.h5'
-            if not os.path.exists(output_path):
-                with st.spinner(f'Downloading model {i+1}/5...'):
-                    gdown.download(url, output_path, quiet=True)
+            if not os.path.exists(model_path):
+                with st.spinner(f'Downloading {filename}...'):
+                    gdown.download(url, model_path, quiet=True)
             
-            model = tf.keras.models.load_model(
-                output_path,
-                custom_objects=get_custom_objects(),
-                compile=False  # Try with compile=False if issues persist
-            )
-            models.append(model)
+            with st.spinner(f'Loading {filename}...'):
+                model = tf.keras.models.load_model(
+                    model_path,
+                    custom_objects=custom_objects,
+                    compile=False
+                )
+                models.append(model)
         except Exception as e:
-            st.error(f"Error loading model {i}: {str(e)}")
-            st.error("Please ensure the model files are not corrupted.")
-            raise e
+            st.error(f"Failed to load {filename}: {str(e)}")
+            st.error("Please check your internet connection and try again.")
+            raise
     
     return models
 
-# Define the description for each label
+# Activity Descriptions
 activity_descriptions = {
-    'Seizure': "Seizure activity is characterized by sudden and uncontrolled electrical disturbances in the brain, often leading to convulsions or loss of consciousness.",
-    'LPD': "LPD (Localize Paroxysmal Discharge) refers to abnormal electrical activity occurring in a specific region of the brain, often associated with certain neurological conditions.",
-    'GPD': "GPD (Generalized Paroxysmal Discharge) involves widespread brain activity that can cause sudden physical or behavioral changes, commonly seen in epilepsy.",
-    'LRDA': "LRDA (Low-Risk Developmental Abnormality) refers to less severe brain anomalies often observed during brain development, potentially leading to cognitive delays or learning difficulties.",
-    'GRDA': "GRDA (Generalized Risk Developmental Abnormality) is a more severe form of developmental abnormality that can affect brain function and cognitive abilities.",
-    'Other': "Other includes any brain activity that doesn't fit into the predefined categories, potentially indicating a variety of neurological conditions."
+    'Seizure': "Seizure activity is characterized by sudden and uncontrolled electrical disturbances in the brain.",
+    'LPD': "LPD (Localize Paroxysmal Discharge) refers to abnormal electrical activity in a specific brain region.",
+    'GPD': "GPD (Generalized Paroxysmal Discharge) involves widespread brain activity changes.",
+    'LRDA': "LRDA (Low-Risk Developmental Abnormality) refers to less severe brain anomalies.",
+    'GRDA': "GRDA (Generalized Risk Developmental Abnormality) affects brain function and cognition.",
+    'Other': "Other includes activity that doesn't fit predefined categories."
 }
 
-# Ask for user's name
-name = st.text_input("Please enter your name:")
+# Main App
+def main():
+    name = st.text_input("Please enter your name:")
+    uploaded_file = st.file_uploader("📁 Upload EEG .parquet File", type=["parquet"])
+    
+    if uploaded_file and name:
+        try:
+            # Load data
+            with st.spinner('Reading EEG data...'):
+                df = pd.read_parquet(uploaded_file)
+            
+            # Process data
+            with st.spinner('Processing spectrogram...'):
+                spec = eeg_to_spectrogram(df)
+                x = np.zeros((1, 128, 256, 8), dtype='float32')
+                for i in range(4):
+                    x[0,:,:,i] = spec[:,:,i]
+                    x[0,:,:,i+4] = spec[:,:,i]
+            
+            # Load models and predict
+            with st.spinner('Initializing models...'):
+                models = load_models()
+            
+            with st.spinner('Making predictions...'):
+                preds = [model.predict(x, verbose=0)[0] for model in models]
+                final_pred = np.mean(preds, axis=0)
+            
+            # Display results
+            labels = ['Seizure', 'LPD', 'GPD', 'LRDA', 'GRDA', 'Other']
+            max_idx = np.argmax(final_pred)
+            max_label = labels[max_idx]
+            max_prob = final_pred[max_idx]
+            
+            st.markdown("### 📊 Prediction Results")
+            cols = st.columns(2)
+            for i, (label, prob) in enumerate(zip(labels, final_pred)):
+                with cols[i % 2]:
+                    st.metric(label, f"{prob:.2%}", 
+                            delta="HIGHEST" if label == max_label else None)
+            
+            st.markdown("### 📝 Diagnosis Summary")
+            st.success(f"Most likely activity: **{max_label}** ({max_prob:.2%} confidence)")
+            st.markdown(f"**Description:** {activity_descriptions[max_label]}")
+            
+            # Generate report
+            report = f"""
+            <h2>Brain EEG Diagnosis Report</h2>
+            <p><strong>Patient:</strong> {name}</p>
+            <p><strong>Date:</strong> {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
+            <p><strong>Diagnosis:</strong> {max_label} ({max_prob:.2%})</p>
+            <p><strong>Details:</strong> {activity_descriptions[max_label]}</p>
+            """
+            st.download_button("📥 Download Report", report, "eeg_report.html", "text/html")
+            
+        except Exception as e:
+            st.error(f"Processing failed: {str(e)}")
+            st.error("Please check your input file and try again.")
 
-# File upload
-uploaded_file = st.file_uploader("📁 Upload EEG .parquet File", type=["parquet"])
-
-if uploaded_file and name:
-    st.success(f"EEG file uploaded. Processing for {name}...")
-
-    try:
-        # Read and process EEG data
-        df = pd.read_parquet(uploaded_file)
-        st.write("📋 EEG Columns Found:", df.columns.tolist())
-
-        # Generate spectrogram
-        with st.spinner('Generating spectrogram...'):
-            spec = eeg_to_spectrogram(df)
-
-        # Format input for EfficientNet
-        x = np.zeros((1, 128, 256, 8), dtype='float32')
-        for i in range(4):
-            x[0,:,:,i] = spec[:,:,i]
-            x[0,:,:,i+4] = spec[:,:,i]
-
-        # Load models and make predictions
-        with st.spinner('Loading models and making predictions...'):
-            models = load_models()
-            preds = [model.predict(x, verbose=0)[0] for model in models]  # verbose=0 to suppress output
-            final_pred = np.mean(preds, axis=0)
-
-        labels = ['Seizure', 'LPD', 'GPD', 'LRDA', 'GRDA', 'Other']
-        max_idx = np.argmax(final_pred)
-        max_label = labels[max_idx]
-        max_val = final_pred[max_idx]
-
-        # Prediction Display
-        st.markdown("### 📊 Prediction Probabilities")
-        col1, col2 = st.columns(2)
-        for i, label in enumerate(labels):
-            with col1 if i % 2 == 0 else col2:
-                color = "#1565c0" if label == max_label else "#455a64"
-                st.markdown(f"<div style='color:{color}; font-weight:bold'>{label}: {final_pred[i]:.4f}</div>", unsafe_allow_html=True)
-
-        results_df = pd.DataFrame({'Class': labels, 'Probability': final_pred})
-        st.bar_chart(results_df.set_index('Class'))
-
-        # Diagnosis Summary
-        st.markdown("### 📝 Diagnosis Summary")
-        st.markdown(f"<div class='diagnosis-result'>🧠 Most Likely: <b>{max_label} ({max_val:.4f})</b></div>", unsafe_allow_html=True)
-        st.markdown("💡 This result represents the most probable type of harmful brain activity detected.")
-
-        # Display brief description of the detected activity
-        st.markdown("### 📚 Activity Description")
-        st.markdown(f"<div style='font-size: 16px;'>{max_label}: {activity_descriptions[max_label]}</div>", unsafe_allow_html=True)
-
-        # Generate medical report
-        report = f"""
-        <h2 style="text-align: center; color: #1565c0;">Brain EEG Diagnosis Report</h2>
-        <p><strong>Patient Name:</strong> {name}</p>
-        <p><strong>Date:</strong> {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}</p>
-        <p><strong>Diagnosis:</strong> Most Likely: <strong>{max_label}</strong> ({max_val:.4f})</p>
-        <h4>Activity Description:</h4>
-        <p>{activity_descriptions[max_label]}</p>
-        """
-
-        # Downloadable report
-        st.markdown("### 📝 Download Diagnosis Report")
-        st.download_button("📥 Download Medical Report", report, "diagnosis_report.html", "text/html")
-
-    except Exception as e:
-        st.error(f"❌ Error: {e}")
-        st.error("If the error persists, please check your input file and try again.")
+if __name__ == "__main__":
+    main()
