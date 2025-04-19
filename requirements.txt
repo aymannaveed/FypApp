@@ -3,5 +3,5 @@ pandas
 numpy
 tensorflow
 librosa
-pywt
 gdown
+PyWavelets==1.5.0
