@@ -5,14 +5,10 @@ import numpy as np
 import pandas as pd
 import gdown
 import os
+from keras.utils import get_custom_objects
 from utils import eeg_to_spectrogram
-from keras.utils import register_keras_serializable
 
-# Register custom layer to handle the SlicingOpLambda error
-@register_keras_serializable()
-class SlicingOpLambda(tf.keras.layers.Layer):
-    def call(self, inputs):
-        return inputs  # Dummy passthrough — actual slicing not used in inference
+# Remove custom layer registration, allowing TensorFlow to handle layers like 'getitem' automatically
 
 # Set the page config
 st.set_page_config(page_title="Brain EEG Classifier", layout="wide")
@@ -55,22 +51,14 @@ st.markdown('<p class="big-font">🧠 Harmful Brain Activity Classifier</p>', un
 st.markdown('<p class="small-font">EEG Diagnosis for a Smarter Tomorrow!</p>', unsafe_allow_html=True)
 st.markdown("---")
 
-# Custom Layers Definition
-class FixedDropout(tf.keras.layers.Dropout):
-    def __init__(self, rate, **kwargs):
-        super().__init__(rate, **kwargs)
-        self.supports_masking = True
-
-    def call(self, inputs, training=None):
-        if training is None:
-            training = tf.keras.backend.learning_phase()
-        return super().call(inputs, training=training)
-
-# Register custom objects
-custom_objects = {
-    'FixedDropout': FixedDropout,
-    'SlicingOpLambda': SlicingOpLambda,
-    'tf.operators.getitem': SlicingOpLambda
+# Activity Descriptions
+activity_descriptions = {
+    'Seizure': "Seizure activity is characterized by sudden and uncontrolled electrical disturbances in the brain.",
+    'LPD': "LPD (Localize Paroxysmal Discharge) refers to abnormal electrical activity in a specific brain region.",
+    'GPD': "GPD (Generalized Paroxysmal Discharge) involves widespread brain activity changes.",
+    'LRDA': "LRDA (Low-Risk Developmental Abnormality) refers to less severe brain anomalies.",
+    'GRDA': "GRDA (Generalized Risk Developmental Abnormality) affects brain function and cognition.",
+    'Other': "Other includes activity that doesn't fit predefined categories."
 }
 
 # Model Loading Function
@@ -95,11 +83,7 @@ def load_models():
                     gdown.download(url, model_path, quiet=True)
             
             with st.spinner(f'Loading {filename}...'):
-                model = tf.keras.models.load_model(
-                    model_path,
-                    custom_objects=custom_objects,
-                    compile=False
-                )
+                model = tf.keras.models.load_model(model_path, compile=False)
                 models.append(model)
         except Exception as e:
             st.error(f"Failed to load {filename}: {str(e)}")
@@ -107,16 +91,6 @@ def load_models():
             raise
     
     return models
-
-# Activity Descriptions
-activity_descriptions = {
-    'Seizure': "Seizure activity is characterized by sudden and uncontrolled electrical disturbances in the brain.",
-    'LPD': "LPD (Localize Paroxysmal Discharge) refers to abnormal electrical activity in a specific brain region.",
-    'GPD': "GPD (Generalized Paroxysmal Discharge) involves widespread brain activity changes.",
-    'LRDA': "LRDA (Low-Risk Developmental Abnormality) refers to less severe brain anomalies.",
-    'GRDA': "GRDA (Generalized Risk Developmental Abnormality) affects brain function and cognition.",
-    'Other': "Other includes activity that doesn't fit predefined categories."
-}
 
 # Main App
 def main():
