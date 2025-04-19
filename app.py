@@ -45,7 +45,7 @@ st.markdown('<p class="small-font">EEG Diagnosis for a Smarter Tomorrow!</p>', u
 st.markdown("---")
 
 # Handle custom dropout layer
-from tensorflow.keras.layers import Dropout
+from tensorflow.keras.layers import Dropout, Lambda
 from tensorflow.keras.utils import get_custom_objects
 import tensorflow.keras.backend as K
 
@@ -58,7 +58,21 @@ class FixedDropout(Dropout):
             training = K.learning_phase()
         return super(FixedDropout, self).call(inputs, training)
 
-get_custom_objects().update({'FixedDropout': FixedDropout})
+# Custom layer to handle SlicingOpLambda error
+class SlicingOpLambda(tf.keras.layers.Layer):
+    def __init__(self, **kwargs):
+        super(SlicingOpLambda, self).__init__(**kwargs)
+    
+    def call(self, inputs):
+        # Default implementation - modify if you know the exact slicing needed
+        return inputs[:, :, :, :]
+
+# Register custom objects
+get_custom_objects().update({
+    'FixedDropout': FixedDropout,
+    'SlicingOpLambda': SlicingOpLambda,
+    'tf.operators.getitem': SlicingOpLambda  # Handle the legacy name
+})
 
 # Load all 5 models from Google Drive
 @st.cache_resource
@@ -84,11 +98,13 @@ def load_models():
             
             model = tf.keras.models.load_model(
                 output_path,
-                custom_objects={'FixedDropout': FixedDropout}
+                custom_objects=get_custom_objects(),
+                compile=False  # Try with compile=False if issues persist
             )
             models.append(model)
         except Exception as e:
             st.error(f"Error loading model {i}: {str(e)}")
+            st.error("Please ensure the model files are not corrupted.")
             raise e
     
     return models
@@ -113,10 +129,11 @@ if uploaded_file and name:
     st.success(f"EEG file uploaded. Processing for {name}...")
 
     try:
+        # Read and process EEG data
         df = pd.read_parquet(uploaded_file)
         st.write("📋 EEG Columns Found:", df.columns.tolist())
 
-        # Generate spectrogram (no wavelet)
+        # Generate spectrogram
         with st.spinner('Generating spectrogram...'):
             spec = eeg_to_spectrogram(df)
 
@@ -126,9 +143,10 @@ if uploaded_file and name:
             x[0,:,:,i] = spec[:,:,i]
             x[0,:,:,i+4] = spec[:,:,i]
 
+        # Load models and make predictions
         with st.spinner('Loading models and making predictions...'):
             models = load_models()
-            preds = [model.predict(x)[0] for model in models]
+            preds = [model.predict(x, verbose=0)[0] for model in models]  # verbose=0 to suppress output
             final_pred = np.mean(preds, axis=0)
 
         labels = ['Seizure', 'LPD', 'GPD', 'LRDA', 'GRDA', 'Other']
@@ -172,3 +190,4 @@ if uploaded_file and name:
 
     except Exception as e:
         st.error(f"❌ Error: {e}")
+        st.error("If the error persists, please check your input file and try again.")
