@@ -10,57 +10,27 @@ from tensorflow.keras.utils import get_custom_objects
 import tensorflow.keras.backend as K
 import gdown
 
-# Page setup
-st.set_page_config(page_title="Brain EEG Classifier", layout="wide")
-st.markdown("""
-    <style>
-        .stApp { background-color: #e3f2fd; }
-        .big-font {
-            font-size: 35px !important;
-            font-weight: 600;
-            color: #1565c0;
-            text-align: center;
-        }
-        .small-font {
-            font-size: 18px !important;
-            color: #455a64;
-            text-align: center;
-        }
-        .stButton>button {
-            background-color: #1565c0;
-            color: white;
-            border-radius: 8px;
-            padding: 0.6rem 1.2rem;
-            font-size: 16px;
-        }
-        .stDownloadButton>button {
-            background-color: #1e88e5;
-            color: white;
-        }
-    </style>
-""", unsafe_allow_html=True)
-st.markdown('<p class="big-font">🧠 Harmful Brain Activity Classifier</p>', unsafe_allow_html=True)
-st.markdown('<p class="small-font">EEG Diagnosis for a Smarter Tomorrow!</p>', unsafe_allow_html=True)
-st.markdown("---")
+# Workaround for Lambda layers used as SlicingOpLambda
+def SlicingOpLambda(x):
+    return x  # Pass-through identity (since actual slicing logic was lost in saved model)
 
-# Custom layer definitions
+# Register the custom dropout and Lambda layer
 class FixedDropout(Dropout):
     def __init__(self, rate, noise_shape=None, seed=None, **kwargs):
         super(FixedDropout, self).__init__(rate, noise_shape=noise_shape, seed=seed, **kwargs)
         self.supports_masking = True
-
+    
     def call(self, inputs, training=None):
         if training is None:
             training = K.learning_phase()
         return super(FixedDropout, self).call(inputs, training)
 
-# Register custom layers
 get_custom_objects().update({
     'FixedDropout': FixedDropout,
-    'SlicingOpLambda': Lambda
+    'SlicingOpLambda': SlicingOpLambda  # Register the SlicingOpLambda workaround
 })
 
-# Google Drive model file IDs
+# Google Drive IDs
 drive_links = [
     "19vagTsjJushCJ25YikZzkCTyaLFfmfO-",
     "1LhptLaTjdDQ7KAoKzYCgUqNrvDFdOyci",
@@ -81,11 +51,8 @@ def load_models():
             gdown.download(url, model_path, quiet=False)
         model = tf.keras.models.load_model(
             model_path,
-            custom_objects={
-                'FixedDropout': FixedDropout,
-                'SlicingOpLambda': Lambda
-            },
-            compile=False
+            custom_objects={'FixedDropout': FixedDropout, 'SlicingOpLambda': SlicingOpLambda},
+            compile=False  # We don't need to compile the model for inference
         )
         models.append(model)
     return models
