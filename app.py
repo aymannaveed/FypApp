@@ -1,38 +1,11 @@
 import streamlit as st
 from datetime import datetime
-import gdown
-import os
 import tensorflow as tf
 import numpy as np
 import pandas as pd
+import gdown
+import os
 from utils import eeg_to_spectrogram
-from tensorflow.keras.layers import Dropout
-from tensorflow.keras.utils import get_custom_objects
-import tensorflow.keras.backend as K
-
-# Workaround for Lambda layers used as SlicingOpLambda
-class SlicingOpLambda(tf.keras.layers.Layer):
-    def __init__(self, name=None, **kwargs):
-        super(SlicingOpLambda, self).__init__(name=name, **kwargs)
-
-    def call(self, inputs):
-        return inputs  # Pass-through identity (since actual slicing logic was lost in saved model)
-
-# Register the custom dropout and Lambda layer
-class FixedDropout(Dropout):
-    def __init__(self, rate, noise_shape=None, seed=None, **kwargs):
-        super(FixedDropout, self).__init__(rate, noise_shape=noise_shape, seed=seed, **kwargs)
-        self.supports_masking = True
-    
-    def call(self, inputs, training=None):
-        if training is None:
-            training = K.learning_phase()
-        return super(FixedDropout, self).call(inputs, training)
-
-get_custom_objects().update({
-    'FixedDropout': FixedDropout,
-    'SlicingOpLambda': SlicingOpLambda  # Register the fixed Lambda layer
-})
 
 # Set the page config
 st.set_page_config(page_title="Brain EEG Classifier", layout="wide")
@@ -71,31 +44,53 @@ st.markdown('<p class="big-font">🧠 Harmful Brain Activity Classifier</p>', un
 st.markdown('<p class="small-font">EEG Diagnosis for a Smarter Tomorrow!</p>', unsafe_allow_html=True)
 st.markdown("---")
 
-# Google Drive IDs (use the correct ID format here)
-drive_links = [
-    "19vagTsjJushCJ25YikZzkCTyaLFfmfO-",  # Updated file ID
-    "1LhptLaTjdDQ7KAoKzYCgUqNrvDFdOyci",
-    "1iYXG31bFpLT-eIIFCk7qLSKnd67kwUP8",
-    "1e7AEIA2sdJid1T5_HVDfTZz2NzWGYVhZ",
-    "13KoESOQzPG1GwaFD5BBRT-SudBhkMD-k"
-]
+# Handle custom dropout layer
+from tensorflow.keras.layers import Dropout
+from tensorflow.keras.utils import get_custom_objects
+import tensorflow.keras.backend as K
 
-# Download and load models
+class FixedDropout(Dropout):
+    def __init__(self, rate, noise_shape=None, seed=None, **kwargs):
+        super(FixedDropout, self).__init__(rate, noise_shape=noise_shape, seed=seed, **kwargs)
+        self.supports_masking = True
+    def call(self, inputs, training=None):
+        if training is None:
+            training = K.learning_phase()
+        return super(FixedDropout, self).call(inputs, training)
+
+get_custom_objects().update({'FixedDropout': FixedDropout})
+
+# Load all 5 models from Google Drive
 @st.cache_resource
 def load_models():
-    os.makedirs("models", exist_ok=True)
     models = []
-    for i, file_id in enumerate(drive_links):
-        model_path = f"models/EffNetB0_Fold{i}.h5"
-        if not os.path.exists(model_path):
-            url = f"https://drive.google.com/uc?id={file_id}"  # Corrected URL format
-            gdown.download(url, model_path, quiet=False)
-        model = tf.keras.models.load_model(
-            model_path,
-            custom_objects={'FixedDropout': FixedDropout, 'SlicingOpLambda': SlicingOpLambda},
-            compile=False  # We don't need to compile the model for inference
-        )
-        models.append(model)
+    model_urls = [
+        'https://drive.google.com/uc?id=19vagTsjJushCJ25YikZzkCTyaLFfmfO-',
+        'https://drive.google.com/uc?id=1LhptLaTjdDQ7KAoKzYCgUqNrvDFdOyci',
+        'https://drive.google.com/uc?id=1iYXG31bFpLT-eIIFCk7qLSKnd67kwUP8',
+        'https://drive.google.com/uc?id=1e7AEIA2sdJid1T5_HVDfTZz2NzWGYVhZ',
+        'https://drive.google.com/uc?id=13KoESOQzPG1GwaFD5BBRT-SudBhkMD-k'
+    ]
+    
+    # Create a temporary directory for models
+    os.makedirs('temp_models', exist_ok=True)
+    
+    for i, url in enumerate(model_urls):
+        try:
+            output_path = f'temp_models/EffNetB0_Fold{i}.h5'
+            if not os.path.exists(output_path):
+                with st.spinner(f'Downloading model {i+1}/5...'):
+                    gdown.download(url, output_path, quiet=True)
+            
+            model = tf.keras.models.load_model(
+                output_path,
+                custom_objects={'FixedDropout': FixedDropout}
+            )
+            models.append(model)
+        except Exception as e:
+            st.error(f"Error loading model {i}: {str(e)}")
+            raise e
+    
     return models
 
 # Define the description for each label
@@ -122,7 +117,8 @@ if uploaded_file and name:
         st.write("📋 EEG Columns Found:", df.columns.tolist())
 
         # Generate spectrogram (no wavelet)
-        spec = eeg_to_spectrogram(df)
+        with st.spinner('Generating spectrogram...'):
+            spec = eeg_to_spectrogram(df)
 
         # Format input for EfficientNet
         x = np.zeros((1, 128, 256, 8), dtype='float32')
@@ -130,9 +126,10 @@ if uploaded_file and name:
             x[0,:,:,i] = spec[:,:,i]
             x[0,:,:,i+4] = spec[:,:,i]
 
-        models = load_models()
-        preds = [model.predict(x)[0] for model in models]
-        final_pred = np.mean(preds, axis=0)
+        with st.spinner('Loading models and making predictions...'):
+            models = load_models()
+            preds = [model.predict(x)[0] for model in models]
+            final_pred = np.mean(preds, axis=0)
 
         labels = ['Seizure', 'LPD', 'GPD', 'LRDA', 'GRDA', 'Other']
         max_idx = np.argmax(final_pred)
