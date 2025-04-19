@@ -5,7 +5,7 @@ import tensorflow as tf
 import numpy as np
 import pandas as pd
 from utils import eeg_to_spectrogram
-from tensorflow.keras.layers import Dropout
+from tensorflow.keras.layers import Dropout, Lambda
 from tensorflow.keras.utils import get_custom_objects
 import tensorflow.keras.backend as K
 import gdown
@@ -43,18 +43,24 @@ st.markdown('<p class="big-font">🧠 Harmful Brain Activity Classifier</p>', un
 st.markdown('<p class="small-font">EEG Diagnosis for a Smarter Tomorrow!</p>', unsafe_allow_html=True)
 st.markdown("---")
 
+# Custom layer definitions
 class FixedDropout(Dropout):
     def __init__(self, rate, noise_shape=None, seed=None, **kwargs):
         super(FixedDropout, self).__init__(rate, noise_shape=noise_shape, seed=seed, **kwargs)
         self.supports_masking = True
+
     def call(self, inputs, training=None):
         if training is None:
             training = K.learning_phase()
         return super(FixedDropout, self).call(inputs, training)
 
-get_custom_objects().update({'FixedDropout': FixedDropout})
+# Register custom layers
+get_custom_objects().update({
+    'FixedDropout': FixedDropout,
+    'SlicingOpLambda': Lambda
+})
 
-# Google Drive IDs
+# Google Drive model file IDs
 drive_links = [
     "19vagTsjJushCJ25YikZzkCTyaLFfmfO-",
     "1LhptLaTjdDQ7KAoKzYCgUqNrvDFdOyci",
@@ -75,7 +81,11 @@ def load_models():
             gdown.download(url, model_path, quiet=False)
         model = tf.keras.models.load_model(
             model_path,
-            custom_objects={'FixedDropout': FixedDropout}
+            custom_objects={
+                'FixedDropout': FixedDropout,
+                'SlicingOpLambda': Lambda
+            },
+            compile=False
         )
         models.append(model)
     return models
