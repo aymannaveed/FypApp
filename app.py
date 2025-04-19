@@ -29,12 +29,13 @@ class FixedDropout(Dropout):
             training = K.learning_phase()
         return super(FixedDropout, self).call(inputs, training)
 
+# Register custom objects for TensorFlow
 get_custom_objects().update({
     'FixedDropout': FixedDropout,
     'SlicingOpLambda': SlicingOpLambda  # Register the fixed Lambda layer
 })
 
-# Google Drive IDs
+# Google Drive IDs for models
 drive_links = [
     "19vagTsjJushCJ25YikZzkCTyaLFfmfO-",
     "1LhptLaTjdDQ7KAoKzYCgUqNrvDFdOyci",
