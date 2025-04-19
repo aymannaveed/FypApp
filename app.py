@@ -11,8 +11,12 @@ import tensorflow.keras.backend as K
 import gdown
 
 # Workaround for Lambda layers used as SlicingOpLambda
-def SlicingOpLambda(x):
-    return x  # Pass-through identity (since actual slicing logic was lost in saved model)
+class SlicingOpLambda(tf.keras.layers.Layer):
+    def __init__(self, name=None, **kwargs):
+        super(SlicingOpLambda, self).__init__(name=name, **kwargs)
+
+    def call(self, inputs):
+        return inputs  # Pass-through identity (since actual slicing logic was lost in saved model)
 
 # Register the custom dropout and Lambda layer
 class FixedDropout(Dropout):
@@ -27,7 +31,7 @@ class FixedDropout(Dropout):
 
 get_custom_objects().update({
     'FixedDropout': FixedDropout,
-    'SlicingOpLambda': SlicingOpLambda  # Register the SlicingOpLambda workaround
+    'SlicingOpLambda': SlicingOpLambda  # Register the fixed Lambda layer
 })
 
 # Google Drive IDs
